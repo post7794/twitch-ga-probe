@@ -1,0 +1,45 @@
+name: kasada-ipv6
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: "WARP endpoint ip:port"
+        required: false
+        default: "162.159.192.1:2408"
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: xbox-cn/twitch-reg-test
+          token: ${{ secrets.TWITCH_PAT }}
+          path: src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: WARP up + kasada family probe (single step)
+        shell: pwsh
+        run: |
+          $exe = "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe"
+          $rd  = "D:\warp-data"
+          New-Item -ItemType Directory -Force -Path $rd | Out-Null
+          & $exe generate --data-dir $rd 2>&1 | Out-String
+          $common = @("run","--data-dir",$rd,"--http-addr","127.0.0.1:8118","--socks-addr","127.0.0.1:1080","--dns","1.1.1.1")
+          $proc = Start-Process -FilePath $exe -ArgumentList ($common + @("--endpoint","${{ inputs.endpoint }}")) -RedirectStandardOutput "D:\warp.out.log" -RedirectStandardError "D:\warp.err.log" -PassThru
+          $ready = $false
+          for ($i=0; $i -lt 20; $i++) {
+            Start-Sleep 4
+            $t = curl.exe -s --max-time 8 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace 2>$null
+            if ($t -match "warp=on") { $ready = $true; Write-Host "WARP ready"; break }
+          }
+          if (-not $ready) { Write-Host "WARP NOT READY"; exit 0 }
+          Write-Host "--- warp egress trace ---"; $t | Out-String
+          python "$env:GITHUB_WORKSPACE\kprobe.py"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
