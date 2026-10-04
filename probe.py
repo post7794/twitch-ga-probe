@@ -15,6 +15,7 @@ TARGETS = [
     "www.twitch.tv", "twitch.tv", "passport.twitch.tv", "gql.twitch.tv",
     "client-integrity.twitch.tv", "k.twitch.tv", "assets.twitch.tv",
     "static.twitch.tv", "api.ipify.org", "api6.ipify.org",
+    "ipv4only.arpa", "ipv6.google.com",
 ]
 FAM = {"v4": socket.AF_INET, "v6": socket.AF_INET6}
 
@@ -27,7 +28,7 @@ def dns(host, fam):
         return f"ERR:{type(e).__name__}:{e}"
 
 
-def tcp(host, fam, port=443, timeout=10):
+def tcp(host, fam, port=443, timeout=6):
     famc = FAM[fam]
     try:
         infos = socket.getaddrinfo(host, port, famc, socket.SOCK_STREAM)
@@ -49,7 +50,7 @@ def tcp(host, fam, port=443, timeout=10):
             pass
 
 
-def https(host, path, fam, method="GET", body=b"", headers=None, timeout=15):
+def https(host, path, fam, method="GET", body=b"", headers=None, timeout=10):
     famc = FAM[fam]
     try:
         infos = socket.getaddrinfo(host, 443, famc, socket.SOCK_STREAM)
@@ -153,9 +154,15 @@ def main():
         "v6": https("passport.twitch.tv", "/protected_register", "v6", "POST", payload, reg_hdr),
     }
 
+    out = json.dumps(report, ensure_ascii=False, indent=2)
     print("=====PROBE_JSON_BEGIN=====")
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(out)
     print("=====PROBE_JSON_END=====")
+    try:
+        with open("probe-out.json", "w", encoding="utf-8") as f:
+            f.write(out)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
