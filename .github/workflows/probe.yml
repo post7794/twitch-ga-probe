@@ -21,6 +21,7 @@ jobs:
 
       - name: Interfaces, routes, egress
         shell: pwsh
+        continue-on-error: true
         run: |
           Write-Host "===== ipconfig ====="
           ipconfig | Out-String
@@ -37,6 +38,27 @@ jobs:
           Write-Host "===== CF trace v6 ====="
           curl.exe -6 -s --max-time 15 https://cloudflare.com/cdn-cgi/trace
 
+      - name: IPv6 transition tech + DNS64
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Write-Host "===== teredo state ====="
+          netsh interface teredo show state | Out-String
+          Write-Host "===== ipv6 interfaces ====="
+          netsh interface ipv6 show interface | Out-String
+          Write-Host "===== DNS64/NAT64 detect (ipv4only.arpa AAAA) ====="
+          Resolve-DnsName -Type AAAA ipv4only.arpa -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String
+          Write-Host "===== egress IPv6 via DNS64 host ====="
+          curl.exe -6 -s --max-time 12 https://ipv6.google.com/ -o NUL -w "ipv6.google.com HTTP %{http_code} %{time_total}s`n"
+
       - name: Python family-split probe
         shell: pwsh
         run: python probe.py
+
+      - name: Upload probe output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-out
+          path: probe-out.json
+          if-no-files-found: ignore
