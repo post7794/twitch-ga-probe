@@ -1,0 +1,66 @@
+name: egress-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "direct | warp | vpngate"
+        required: false
+        default: "direct"
+      endpoint:
+        description: "WARP endpoint ip:port (warp mode)"
+        required: false
+        default: "162.159.192.1:2408"
+
+jobs:
+  t:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout probe repo
+        uses: actions/checkout@v4
+
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: xbox-cn/twitch-reg-test
+          token: ${{ secrets.TWITCH_PAT }}
+          path: src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install playwright + requests
+        shell: pwsh
+        run: |
+          pip install playwright requests loguru --quiet
+
+      - name: Egress test (single step, processes must live)
+        shell: pwsh
+        run: |
+          $mode = "${{ inputs.mode }}"
+          $proc = $null
+          if ($mode -eq "warp") {
+            $exe = "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe"
+            $rd  = "D:\warp-data"
+            New-Item -ItemType Directory -Force -Path $rd | Out-Null
+            & $exe generate --data-dir $rd 2>&1 | Out-String
+            $common = @("run","--data-dir",$rd,"--http-addr","127.0.0.1:8118","--socks-addr","127.0.0.1:1080","--dns","1.1.1.1")
+            $proc = Start-Process -FilePath $exe -ArgumentList ($common + @("--endpoint","${{ inputs.endpoint }}")) -RedirectStandardOutput "D:\warp.out.log" -RedirectStandardError "D:\warp.err.log" -PassThru
+            for ($i=0; $i -lt 20; $i++) { Start-Sleep 4; $t = curl.exe -s --max-time 8 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace 2>$null; if ($t -match "warp=on") { break } }
+            $env:PROXY = "http://127.0.0.1:8118"
+            $env:LABEL = "warp"
+          } elseif ($mode -eq "vpngate") {
+            choco install openvpn --no-progress -y 2>&1 | Out-String
+            $env:VPNGATE_OPENVPN = "C:\Program Files\OpenVPN\bin\openvpn.exe"
+            $env:VN_COUNTRIES = "JP,KR,TH,TW"
+            python "$env:GITHUB_WORKSPACE\vpngate_connect.py"
+            $env:LABEL = "vpngate"
+          } else {
+            $env:LABEL = "direct"
+          }
+          Write-Host "=== running egress.py (label=$env:LABEL) ==="
+          python "$env:GITHUB_WORKSPACE\egress.py"
+          if ($proc) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          if ($mode -eq "vpngate") { taskkill /F /IM openvpn.exe 2>&1 | Out-String }
