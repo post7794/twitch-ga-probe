@@ -1,0 +1,42 @@
+name: net-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "free-form note"
+        required: false
+        default: "twitch/kasada ipv4 vs ipv6"
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Interfaces, routes, egress
+        shell: pwsh
+        run: |
+          Write-Host "===== ipconfig ====="
+          ipconfig | Out-String
+          Write-Host "===== IPv6 global addresses ====="
+          Get-NetIPAddress -AddressFamily IPv6 | Format-Table -AutoSize | Out-String
+          Write-Host "===== IPv6 default route ====="
+          Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String
+          Write-Host "===== IPv4 egress (api.ipify.org) ====="
+          curl.exe -4 -s --max-time 15 https://api.ipify.org; Write-Host ""
+          Write-Host "===== IPv6 egress (api6.ipify.org) ====="
+          curl.exe -6 -s --max-time 15 https://api6.ipify.org; Write-Host ""
+          Write-Host "===== CF trace v4 ====="
+          curl.exe -4 -s --max-time 15 https://cloudflare.com/cdn-cgi/trace
+          Write-Host "===== CF trace v6 ====="
+          curl.exe -6 -s --max-time 15 https://cloudflare.com/cdn-cgi/trace
+
+      - name: Python family-split probe
+        shell: pwsh
+        run: python probe.py
