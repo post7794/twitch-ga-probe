@@ -1,0 +1,52 @@
+name: fastly6
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: "WARP endpoint ip:port"
+        required: false
+        default: "162.159.192.1:2408"
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout probe repo
+        uses: actions/checkout@v4
+
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: xbox-cn/twitch-reg-test
+          token: ${{ secrets.TWITCH_PAT }}
+          path: src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install playwright
+        shell: pwsh
+        run: pip install playwright --quiet
+
+      - name: WARP up + browser kasada compare (single step)
+        shell: pwsh
+        run: |
+          $exe = "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe"
+          $rd  = "D:\warp-data"
+          New-Item -ItemType Directory -Force -Path $rd | Out-Null
+          & $exe generate --data-dir $rd 2>&1 | Out-String
+          $common = @("run","--data-dir",$rd,"--http-addr","127.0.0.1:8118","--socks-addr","127.0.0.1:1080","--dns","1.1.1.1")
+          $proc = Start-Process -FilePath $exe -ArgumentList ($common + @("--endpoint","${{ inputs.endpoint }}")) -RedirectStandardOutput "D:\warp.out.log" -RedirectStandardError "D:\warp.err.log" -PassThru
+          $ready = $false
+          for ($i=0; $i -lt 20; $i++) { Start-Sleep 4; $t = curl.exe -s --max-time 8 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace 2>$null; if ($t -match "warp=on") { $ready=$true; break } }
+          if (-not $ready) { Write-Host "WARP NOT READY"; exit 0 }
+          Write-Host "--- warp trace ---"; $t | Out-String
+          Write-Host "--- curl /fp direct vs warp ---"
+          $fp = "https://k.twitchcdn.net/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/fp?x-kpsdk-v=j-1.2.825"
+          curl.exe -s -o NUL -w "direct  /fp HTTP %{http_code}`n" --max-time 20 $fp
+          curl.exe -s -o NUL -w "warphttp/fp HTTP %{http_code}`n" --max-time 20 -x http://127.0.0.1:8118 $fp
+          python "$env:GITHUB_WORKSPACE\fastly6.py"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
