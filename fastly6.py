@@ -59,7 +59,7 @@ def https(ip, host, path, timeout=15):
     except Exception as e:
         return {"err": f"socks:{type(e).__name__}:{e}"}
     try:
-        ss = ssl.create_default_context().wrap_socket(s, server_hostname=host)
+        ss = ssl._create_unverified_context().wrap_socket(s, server_hostname=host)
     except Exception as e:
         s.close()
         return {"err": f"tls:{type(e).__name__}:{e}"}
