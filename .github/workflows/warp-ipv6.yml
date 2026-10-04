@@ -3,10 +3,10 @@ name: warp-ipv6
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "endpoint | scan"
+      endpoint:
+        description: "WARP endpoint ip:port"
         required: false
-        default: "endpoint"
+        default: "162.159.192.1:2408"
 
 jobs:
   probe:
@@ -20,90 +20,61 @@ jobs:
           token: ${{ secrets.TWITCH_PAT }}
           path: src
 
-      - name: Generate WARP identity
+      - name: WARP start + probe (single step, process must live)
         shell: pwsh
         run: |
-          $rd = "D:\warp-data"
+          $exe  = "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe"
+          $rd   = "D:\warp-data"
+          $ep   = "${{ inputs.endpoint }}"
           New-Item -ItemType Directory -Force -Path $rd | Out-Null
-          & "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe" generate --data-dir $rd 2>&1 | Out-String
-          Get-ChildItem $rd -Force | Out-String
+          & $exe generate --data-dir $rd 2>&1 | Out-String
 
-      - name: Start WARP with fallbacks
-        shell: pwsh
-        run: |
-          $exe = "$env:GITHUB_WORKSPACE\src\tools\runner\runner.exe"
-          $rd = "D:\warp-data"
           $common = @("run","--data-dir",$rd,"--http-addr","127.0.0.1:8118","--socks-addr","127.0.0.1:1080","--dns","1.1.1.1")
-          if ("${{ inputs.mode }}" -eq "scan") {
-            $attempts = @( ,(@("--scan","--4","--scan-rtt","1000ms")) )
-            $waitIters = 40
-          } else {
-            $attempts = @(
-              @("--endpoint","162.159.192.1:2408"),
-              @("--endpoint","162.159.193.1:2408"),
-              @("--endpoint","188.114.96.1:2408"),
-              @("--endpoint","162.159.195.1:2408"),
-              ,(@("--scan","--4","--scan-rtt","1000ms"))
-            )
-            $waitIters = 15
-          }
+          $tries = @(@("--endpoint",$ep), @("--endpoint","162.159.193.1:2408"), @("--scan","--4","--scan-rtt","1000ms"))
           $ready = $false
-          foreach ($a in $attempts) {
-            $args = $common + $a
+          foreach ($a in $tries) {
             Write-Host "=== attempt: $($a -join ' ') ==="
             Remove-Item D:\warp.out.log,D:\warp.err.log -ErrorAction SilentlyContinue
-            $p = Start-Process -FilePath $exe -ArgumentList $args -RedirectStandardOutput "D:\warp.out.log" -RedirectStandardError "D:\warp.err.log" -PassThru
-            for ($i=0; $i -lt $waitIters; $i++) {
+            $proc = Start-Process -FilePath $exe -ArgumentList ($common + $a) -RedirectStandardOutput "D:\warp.out.log" -RedirectStandardError "D:\warp.err.log" -PassThru
+            $lim = if ($a[0] -eq "--scan") { 40 } else { 15 }
+            for ($i=0; $i -lt $lim; $i++) {
               Start-Sleep 4
               $t = curl.exe -s --max-time 8 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace 2>$null
-              if ($t -match "warp=on") { Write-Host "WARP READY (iter $i) via: $($a -join ' ')"; $t | Out-String; $ready = $true; break }
+              if ($t -match "warp=on") { Write-Host "WARP READY (iter $i): $($a -join ' ')"; $t | Out-String; $ready = $true; break }
             }
             if ($ready) { break }
-            Write-Host "attempt failed, killing"
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
             Start-Sleep 2
           }
-          if (-not $ready) { Write-Host "WARP NOT READY after all attempts"; exit 0 }
+          if (-not $ready) { Write-Host "WARP NOT READY"; exit 0 }
 
-      - name: Probe egress families via WARP
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          Write-Host "##### direct IPv4 egress (no proxy) #####"
-          curl.exe -4 -s --max-time 15 https://api.ipify.org; Write-Host ""
-          Write-Host "##### WARP HTTP -> CF trace (domain target) #####"
-          curl.exe -s --max-time 25 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace
-          Write-Host "##### WARP HTTP -> api.ipify.org (A only) #####"
-          curl.exe -s --max-time 25 -x http://127.0.0.1:8118 https://api.ipify.org; Write-Host ""
-          Write-Host "##### WARP HTTP -> api6.ipify.org (AAAA only) #####"
-          curl.exe -s --max-time 25 -x http://127.0.0.1:8118 https://api6.ipify.org; Write-Host ""
-          Write-Host "##### WARP SOCKS5h -> api6.ipify.org (AAAA only) #####"
-          curl.exe -s --max-time 25 -x socks5h://127.0.0.1:1080 https://api6.ipify.org; Write-Host ""
-          Write-Host "##### WARP HTTP -> IPv6 LITERAL (2606:4700:4700::1111) CF trace #####"
-          curl.exe -s --max-time 25 -x http://127.0.0.1:8118 "https://[2606:4700:4700::1111]/cdn-cgi/trace"
-          Write-Host "##### WARP HTTP -> www.twitch.tv #####"
+          Write-Host "########## HTTP proxy egress by target family ##########"
+          Write-Host "--- CF trace (domain, Cloudflare) ---"
+          curl.exe -s --max-time 20 -x http://127.0.0.1:8118 https://cloudflare.com/cdn-cgi/trace
+          Write-Host "--- api.ipify.org (IPv4-only record) ---"
+          curl.exe -s --max-time 20 -x http://127.0.0.1:8118 https://api.ipify.org; Write-Host ""
+          Write-Host "--- api6.ipify.org (IPv6-only record) ---"
+          curl.exe -s --max-time 20 -x http://127.0.0.1:8118 https://api6.ipify.org; Write-Host ""
+          Write-Host "--- explicit IPv6 literal CF trace ---"
+          curl.exe -s --max-time 20 -x http://127.0.0.1:8118 "https://[2606:4700:4700::1111]/cdn-cgi/trace"; Write-Host ""
+          Write-Host "--- explicit IPv4 literal CF trace ---"
+          curl.exe -s --max-time 20 -x http://127.0.0.1:8118 "https://1.1.1.1/cdn-cgi/trace"; Write-Host ""
+
+          Write-Host "########## Twitch via WARP ##########"
+          Write-Host "--- www.twitch.tv ---"
           curl.exe -s -o NUL --max-time 25 -x http://127.0.0.1:8118 -w "www.twitch.tv HTTP %{http_code}`n" https://www.twitch.tv/
-          Write-Host "##### WARP HTTP -> gql.twitch.tv/integrity #####"
+          Write-Host "--- gql.twitch.tv/integrity ---"
           curl.exe -s --max-time 25 -x http://127.0.0.1:8118 -X POST https://gql.twitch.tv/integrity -H "Client-ID: kimne78kx3ncx6brgo4mv6wki5h1ko" -H "X-Device-Id: probe-dev-1" -H "Origin: https://www.twitch.tv" -w "`nHTTP %{http_code}`n"
-          Write-Host "##### WARP HTTP -> passport.twitch.tv/protected_register (step1) #####"
+          Write-Host "--- passport.twitch.tv/protected_register (step1, no signing) ---"
           $body = '{"username":"probeabc123xy","password":"Aa1!probe9x8y7z6w","email":"probeabc123xy@example.com","birthday":{"day":15,"month":6,"year":1995,"isOver18":true},"email_verification_enabled":false,"client_id":"kimne78kx3ncx6brgo4mv6wki5h1ko","is_password_guide":"nist"}'
           curl.exe -s --max-time 25 -x http://127.0.0.1:8118 -X POST https://passport.twitch.tv/protected_register -H "Content-Type: text/plain;charset=UTF-8" -H "Origin: https://www.twitch.tv" --data $body -w "`nHTTP %{http_code}`n"
 
-      - name: Real AAAA via DoH
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          foreach ($d in @("www.twitch.tv","passport.twitch.tv","gql.twitch.tv","client-integrity.twitch.tv","k.twitch.tv","twitch.tv","api6.ipify.org")) {
-            $r = curl.exe -s --max-time 15 "https://cloudflare-dns.com/dns-query?name=$d&type=AAAA" -H "accept: application/dns-json"
-            Write-Host "##### $d AAAA: $r"
+          Write-Host "########## DoH AAAA (final addresses) ##########"
+          foreach ($d in @("h2.twitch.map.fastly.net","passport.twitch.tv","gql.twitch.tv","client-integrity.twitch.tv","k.twitch.tv","kadara.tv","kasada.io")) {
+            $r = curl.exe -s --max-time 12 "https://cloudflare-dns.com/dns-query?name=$d&type=AAAA" -H "accept: application/dns-json"
+            Write-Host "$d : $r"
           }
 
-      - name: WARP logs
-        if: always()
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          Write-Host "===== warp.out.log ====="
-          Get-Content D:\warp.out.log -Tail 50 -ErrorAction SilentlyContinue | Out-String
-          Write-Host "===== warp.err.log ====="
-          Get-Content D:\warp.err.log -Tail 50 -ErrorAction SilentlyContinue | Out-String
+          Write-Host "########## WARP logs ##########"
+          Get-Content D:\warp.out.log -Tail 30 -ErrorAction SilentlyContinue | Out-String
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
