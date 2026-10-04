@@ -37,7 +37,7 @@ async def run(proxy, label):
                 h = {k.lower(): v for k, v in r.headers.items() if k.lower().startswith("x-kpsdk")}
                 if h:
                     rec.append({"phase": "pre", "url": r.url.split("?")[0][-60:],
-                                "host": r.url.split("/")[2], "h": {k: str(v)[:90] for k, v in h.items()}})
+                                "host": r.url.split("/")[2], "h": {k: str(v) for k, v in h.items()}})
             except Exception:
                 pass
 
@@ -61,6 +61,10 @@ async def run(proxy, label):
             out["step1_err"] = str(e)[:150]
         await asyncio.sleep(2)
         out["all_kpsdk"] = rec
+        try:
+            out["cookies"] = await page.evaluate("() => document.cookie")
+        except Exception:
+            pass
         await b.close()
     return out
 
