@@ -68,7 +68,7 @@ async def attempt(proxy, label):
             if cap["cd"]:
                 break
         out["ct"] = (cap["ct"][:36] + "...") if cap["ct"] else None
-        out["cd"] = "有" if cap["cd"] else "(none)"
+        out["cd"] = "yes" if cap["cd"] else "none"
         try:
             out["kpsdk"] = await page.evaluate(
                 "() => ({ready: (window.KPSDK&&window.KPSDK.isReady)?window.KPSDK.isReady():null})")
@@ -94,7 +94,7 @@ async def main():
     out["warp"] = await attempt("http://127.0.0.1:8118", "warp")
     out["direct"] = await attempt(None, "direct")
     print("=====S1_BEGIN=====")
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    print(json.dumps(out, ensure_ascii=True, indent=2))
     print("=====S1_END=====")
 
 
