@@ -1,0 +1,36 @@
+name: teredo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  t:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout probe repo
+        uses: actions/checkout@v4
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: xbox-cn/twitch-reg-test
+          token: ${{ secrets.TWITCH_PAT }}
+          path: src
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install playwright
+        shell: pwsh
+        run: pip install playwright --quiet
+      - name: Enable Teredo + step1
+        shell: pwsh
+        run: |
+          netsh interface teredo set state type=enterpriseclient
+          netsh interface teredo set state server=win1910.ipv6.microsoft.com.
+          netsh interface ipv6 set teredo client
+          Start-Sleep -Seconds 25
+          Write-Host "===== ipconfig IPv6 =====" ; ipconfig | Select-String -Pattern "IPv6" | Out-String
+          Write-Host "===== teredo state =====" ; netsh interface teredo show state | Out-String
+          Write-Host "===== v6 egress =====" ; curl.exe -6 -s --max-time 12 https://api6.ipify.org ; Write-Host ""
+          $env:LABEL = "teredo"
+          python "$env:GITHUB_WORKSPACE\egress.py"
