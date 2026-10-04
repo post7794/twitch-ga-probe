@@ -20,20 +20,17 @@ def socks5_connect(ip, port, timeout=12):
     else:
         req = b"\x05\x01\x00\x01" + socket.inet_aton(ip) + struct.pack("!H", port)
     s.sendall(req)
-    head = s.recv(4)
-    if len(head) < 4:
-        raise RuntimeError(f"short resp {head!r}")
+    head = recvn(s, 4)
     if head[1] != 0:
         raise RuntimeError(f"socks rc={head[1]}")
     atyp = head[3]
     if atyp == 1:
-        s.recv(4)
+        recvn(s, 4)
     elif atyp == 4:
-        s.recv(16)
+        recvn(s, 16)
     elif atyp == 3:
-        ln = s.recv(1)[0]
-        s.recv(ln)
-    s.recv(2)
+        recvn(s, recvn(s, 1)[0])
+    recvn(s, 2)
     return s
 
 
